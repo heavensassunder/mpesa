@@ -116,7 +116,8 @@ public class MainActivity extends Activity {
 
     TextView title = new TextView(this);
     title.setText("UssdPilot");
-    title.setTextSize(24, Typeface.DEFAULT_BOLD);
+    title.setTextSize(24);
+    title.setTypeface(Typeface.DEFAULT_BOLD);
     title.setPadding(0, 0, 0, 4);
     root.addView(title);
 
@@ -162,7 +163,7 @@ public class MainActivity extends Activity {
 
     TextView footer = new TextView(this);
     footer.setText("Optional PIN: stored on this phone only. Do not use on a device you don't fully trust.");
-    footer.setTextSize(11, Typeface.DEFAULT);
+    footer.setTextSize(11);
     footer.setPadding(0, 24, 0, 0);
     root.addView(footer);
 
@@ -185,11 +186,11 @@ public class MainActivity extends Activity {
     TextView tv = new TextView(this);
     tv.setPadding(40, 30, 40, 10);
     tv.setText("Creator: heavensassunder\n"
-      + "WhatsApp: ask the creator (see GitHub)\n"
+      + "WhatsApp: +254769204848\n"
       + "GitHub: github.com/heavensassunder/mpesa\n\n"
       + "Personal test project. Your M-Pesa PIN never leaves this device - it is only "
       + "typed into the USSD session on this phone.");
-    tv.setTextSize(14, Typeface.DEFAULT);
+    tv.setTextSize(14);
     new AlertDialog.Builder(this).setTitle("About UssdPilot").setView(tv)
       .setPositiveButton("Close", null).show();
   }
