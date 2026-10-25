@@ -3,8 +3,8 @@
 # No PC, no Android Studio, no Gradle. Run inside Termux.
 #
 # How it works:
-#  - Entries: name + menu steps (e.g. "3,2") + payee numbers (e.g. till "174478",
-#    paybill "170551,1234567890", or a phone picked from Contacts) + optional M-Pesa PIN.
+#  - Entries: name + payment type (Send Money 1,1 / Till 6,2 / Paybill 6,1 / Custom)
+#    + payee numbers (till, business+account, or a phone picked from Contacts) + optional PIN.
 #  - Tap entry -> enter amount -> app dials plain *334# -> accessibility service types the
 #    steps into the USSD popup, presses Send, waits for the next screen, repeats.
 #  - With a PIN stored, it types the PIN when the PIN prompt appears. Without one, it stops
@@ -94,6 +94,9 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
+import android.widget.AdapterView;
+import android.widget.ArrayAdapter;
+import android.widget.Spinner;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -107,6 +110,27 @@ public class MainActivity extends Activity {
   private static final int PICK = 1;
   private static final int GREEN = 0xFF2E7D32;
   private static final int RED = 0xFFC62828;
+
+  // Payment types: the *334# menu steps are filled in automatically per type.
+  static final String[] TYPES = {"Send Money", "Till (Buy Goods)", "Paybill", "Custom (my own steps)"};
+  static final String[] TYPE_STEPS = {"1,1", "6,2", "6,1", ""};
+  static final String[] TYPE_SHORT = {"Send Money", "Till", "Paybill"};
+  View rowPhone, rowTill, rowPaybill, rowCustom;   // field groups of the open Add/Edit dialog
+
+  static int typeOf(String steps) {
+    for (int i = 0; i < TYPE_STEPS.length - 1; i++) if (TYPE_STEPS[i].equals(steps)) return i;
+    return 3;   // Custom
+  }
+  static String typeName(String steps) {
+    int t = typeOf(steps);
+    return t < 3 ? TYPE_SHORT[t] : steps;
+  }
+  void showTypeRows(int type) {
+    if (rowPhone != null) rowPhone.setVisibility(type == 0 ? View.VISIBLE : View.GONE);
+    if (rowTill != null) rowTill.setVisibility(type == 1 ? View.VISIBLE : View.GONE);
+    if (rowPaybill != null) rowPaybill.setVisibility(type == 2 ? View.VISIBLE : View.GONE);
+    if (rowCustom != null) rowCustom.setVisibility(type == 3 ? View.VISIBLE : View.GONE);
+  }
 
   protected void onCreate(Bundle b) {
     super.onCreate(b);
@@ -220,7 +244,7 @@ public class MainActivity extends Activity {
       boolean pinOn = p.length > 3 && p[3].length() > 0;
       Button bt = new Button(this);
       bt.setPadding(16, 10, 16, 10);
-      bt.setText(name + "   [" + steps + (payee.isEmpty() ? "" : " + " + payee) + "]   "
+      bt.setText(name + "   [" + typeName(steps) + (payee.isEmpty() ? "" : " + " + payee) + "]   "
         + (pinOn ? "PIN: on" : "PIN: off"));
       bt.setOnClickListener(new View.OnClickListener() {
         public void onClick(View v) { pay(idx); }
@@ -315,46 +339,116 @@ public class MainActivity extends Activity {
 
   void edit(final int idx) {
     final String[] a = items();
+
     final EditText n = new EditText(this);
     n.setHint("Name e.g. Naivas / Mom / KPLC");
-    final EditText s = new EditText(this);
-    s.setHint("Steps (menu numbers, comma-sep) e.g. 3,2");
-    payeeField = new EditText(this);
-    payeeField.setHint("Payee (comma-sep) e.g. 174478 or 170551,1234567890");
-    payeeField.setInputType(InputType.TYPE_CLASS_TEXT);
-    final EditText pin = new EditText(this);
-    pin.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD);
-    pin.setTransformationMethod(PasswordTransformationMethod.getInstance());   // always display as ****
-    pin.setHint("PIN (optional) - stored on this phone only");
-    if (idx >= 0) {
-      String[] p = a[idx].split("\t", 4);
-      n.setText(p[0]);
-      if (p.length > 1) s.setText(p[1]);
-      if (p.length > 2) payeeField.setText(p[2]);
-      if (p.length > 3) pin.setText(p[3]);
-    }
+
+    TextView typeLabel = new TextView(this);
+    typeLabel.setText("Payment type:");
+    typeLabel.setPadding(0, 16, 0, 0);
+    final Spinner typeSp = new Spinner(this);
+    ArrayAdapter<String> ad = new ArrayAdapter<String>(this, android.R.layout.simple_spinner_item, TYPES);
+    ad.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+    typeSp.setAdapter(ad);
+
+    // Send Money: phone number (+ contact picker) - steps 1,1 are filled in automatically
+    final EditText phoneEt = new EditText(this);
+    phoneEt.setHint("Phone number e.g. 0796204848");
+    phoneEt.setInputType(InputType.TYPE_CLASS_PHONE);
+    payeeField = phoneEt;   // contact picks land here
     Button pick = new Button(this);
     pick.setText("Pick");
     pick.setOnClickListener(new View.OnClickListener() {
       public void onClick(View v) { pickContact(); }
     });
-    LinearLayout payeeRow = new LinearLayout(this);
-    payeeRow.setOrientation(LinearLayout.HORIZONTAL);
-    payeeRow.addView(payeeField, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
-    payeeRow.addView(pick, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+    LinearLayout phoneRow = new LinearLayout(this);
+    phoneRow.setOrientation(LinearLayout.HORIZONTAL);
+    phoneRow.addView(phoneEt, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+    phoneRow.addView(pick, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+    // Till (Buy Goods): till number - steps 6,2 automatically
+    final EditText tillEt = new EditText(this);
+    tillEt.setHint("Till number e.g. 174478");
+    tillEt.setInputType(InputType.TYPE_CLASS_NUMBER);
+
+    // Paybill: business and account in separate boxes - steps 6,1 automatically
+    final EditText bizEt = new EditText(this);
+    bizEt.setHint("Business number e.g. 170551");
+    bizEt.setInputType(InputType.TYPE_CLASS_NUMBER);
+    final EditText acctEt = new EditText(this);
+    acctEt.setHint("Account number");
+    acctEt.setInputType(InputType.TYPE_CLASS_TEXT);
+    LinearLayout paybillBox = new LinearLayout(this);
+    paybillBox.setOrientation(LinearLayout.VERTICAL);
+    paybillBox.addView(bizEt);
+    paybillBox.addView(acctEt);
+
+    // Custom: raw steps + payee (the original free-form behaviour)
+    final EditText stepsEt = new EditText(this);
+    stepsEt.setHint("Steps (menu numbers, comma-sep) e.g. 3,2");
+    final EditText rawPayeeEt = new EditText(this);
+    rawPayeeEt.setHint("Payee (comma-sep) e.g. 174478 or 170551,1234567890");
+    rawPayeeEt.setInputType(InputType.TYPE_CLASS_TEXT);
+    LinearLayout customBox = new LinearLayout(this);
+    customBox.setOrientation(LinearLayout.VERTICAL);
+    customBox.addView(stepsEt);
+    customBox.addView(rawPayeeEt);
+
+    rowPhone = phoneRow; rowTill = tillEt; rowPaybill = paybillBox; rowCustom = customBox;
+
+    final EditText pin = new EditText(this);
+    pin.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD);
+    pin.setTransformationMethod(PasswordTransformationMethod.getInstance());   // always display as ****
+    pin.setHint("PIN (optional) - stored on this phone only");
+
+    int type = 0;
+    if (idx >= 0) {
+      String[] p = a[idx].split("\t", 4);
+      n.setText(p[0]);
+      String steps = p.length > 1 ? p[1] : "";
+      String payee = p.length > 2 ? p[2] : "";
+      type = typeOf(steps);
+      // Seed every type's fields from the saved numbers, so switching type keeps them.
+      String[] parts = payee.split(",", 2);
+      phoneEt.setText(parts[0]);
+      tillEt.setText(parts[0]);
+      bizEt.setText(parts[0]);
+      if (parts.length > 1) acctEt.setText(parts[1]);
+      stepsEt.setText(steps);
+      rawPayeeEt.setText(payee);
+      if (p.length > 3) pin.setText(p[3]);
+    }
+
+    typeSp.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+      public void onItemSelected(AdapterView<?> parent, View view, int pos, long id) { showTypeRows(pos); }
+      public void onNothingSelected(AdapterView<?> parent) { }
+    });
+    typeSp.setSelection(type);
+    showTypeRows(type);
 
     LinearLayout l = new LinearLayout(this);
     l.setOrientation(LinearLayout.VERTICAL);
+    l.setPadding(32, 8, 32, 0);
     l.addView(n);
-    l.addView(s);
-    l.addView(payeeRow);
+    l.addView(typeLabel);
+    l.addView(typeSp);
+    l.addView(phoneRow);
+    l.addView(tillEt);
+    l.addView(paybillBox);
+    l.addView(customBox);
     l.addView(pin);
     AlertDialog.Builder bd = new AlertDialog.Builder(this).setView(l)
       .setPositiveButton("Save", new DialogInterface.OnClickListener() {
         public void onClick(DialogInterface d, int w) {
+          int t = typeSp.getSelectedItemPosition();
+          String steps, payee;
+          if (t == 0)      { steps = TYPE_STEPS[0]; payee = phoneEt.getText().toString(); }
+          else if (t == 1) { steps = TYPE_STEPS[1]; payee = tillEt.getText().toString(); }
+          else if (t == 2) { steps = TYPE_STEPS[2]; payee = bizEt.getText().toString() + "," + acctEt.getText().toString(); }
+          else             { steps = stepsEt.getText().toString().trim(); payee = rawPayeeEt.getText().toString(); }
           String line = n.getText().toString().trim() + "\t"
-            + s.getText().toString().trim() + "\t"
-            + cleanPayee(payeeField.getText().toString()) + "\t"
+            + steps + "\t"
+            + cleanPayee(payee) + "\t"
             + pin.getText().toString().trim();
           String[] r;
           if (idx >= 0) { r = a; r[idx] = line; }
@@ -575,5 +669,5 @@ mkdir -p ~/storage/Download 2>/dev/null || true
 cp UssdPilot.apk ~/storage/Download/UssdPilot.apk 2>/dev/null && echo "Copied to ~/storage/Download/UssdPilot.apk" \
   || echo "APK at $P/UssdPilot.apk (run termux-setup-storage to copy to Downloads)"
 echo "Install it now with:  termux-open $P/UssdPilot.apk"
-echo "Test order: 1) enable AutoPilot  2) add entry steps '1', PIN empty, tap it  3) then retry with PIN stored."
+echo "Test order: 1) enable AutoPilot  2) add a Send Money entry to your own number, PIN empty, send 10 bob  3) then retry with PIN stored."
 echo DONE
