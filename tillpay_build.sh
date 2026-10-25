@@ -336,8 +336,9 @@ apksigner sign --ks ~/debug.keystore --ks-pass pass:android --key-pass pass:andr
   --ks-key-alias key --out TillPay.apk unsigned.apk
 apksigner verify --print-certs TillPay.apk | head -3
 
-# ---- 7. Copy to Downloads ----
+# ---- 7. Copy to Downloads and hint how to install ----
 mkdir -p ~/storage/Download 2>/dev/null || true
 cp TillPay.apk ~/storage/Download/TillPay.apk 2>/dev/null && echo "Copied to ~/storage/Download/TillPay.apk" \
   || echo "APK at $P/TillPay.apk (run termux-setup-storage to copy to Downloads)"
+echo "Install it now with:  termux-open $P/TillPay.apk"
 echo DONE
