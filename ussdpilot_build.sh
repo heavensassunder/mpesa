@@ -86,6 +86,7 @@ import android.os.Bundle;
 import android.provider.ContactsContract;
 import android.provider.Settings;
 import android.text.InputType;
+import android.text.method.PasswordTransformationMethod;
 import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
@@ -245,7 +246,7 @@ public class MainActivity extends Activity {
         public void onClick(DialogInterface d, int w) {
           List<String> q = new ArrayList<String>();
           for (String s : steps.split(",")) if (s.trim().length() > 0) q.add(s.trim());
-          for (String s : payee.split(",")) if (s.trim().length() > 0) q.add(s.trim());
+          for (String s : payee.split(",")) { String c = cleanNumber(s); if (c.length() > 0) q.add(c); }
           String amount = e.getText().toString().trim();
           if (amount.length() > 0) q.add(amount);
           if (q.size() == 0) return;
@@ -261,6 +262,26 @@ public class MainActivity extends Activity {
 
   void dial() {
     startActivity(new Intent(Intent.ACTION_DIAL, Uri.parse("tel:" + Uri.encode("*334#"))));
+  }
+
+  // Contacts often store numbers like "07 96 204 848" or "+254 769 204848".
+  // USSD needs them clean: strip spaces/dashes/brackets and convert to 0... format.
+  static String cleanNumber(String s) {
+    if (s == null) return "";
+    String t = s.replace(" ", "").replace("-", "").replace("(", "").replace(")", "").replace(".", "").trim();
+    if (t.startsWith("+254")) t = "0" + t.substring(4);
+    else if (t.startsWith("254") && t.length() == 12) t = "0" + t.substring(3);
+    return t;
+  }
+
+  // Clean every comma-separated part of a payee field, keeping the commas.
+  static String cleanPayee(String s) {
+    StringBuilder sb = new StringBuilder();
+    for (String part : s.split(",")) {
+      String c = cleanNumber(part);
+      if (c.length() > 0) { if (sb.length() > 0) sb.append(","); sb.append(c); }
+    }
+    return sb.toString();
   }
 
   void pickContact() {
@@ -288,7 +309,7 @@ public class MainActivity extends Activity {
       } finally {
         if (c != null) c.close();
       }
-      if (num != null && num.trim().length() > 0) payeeField.setText(num.trim());
+      if (num != null && num.trim().length() > 0) payeeField.setText(cleanNumber(num));
     }
   }
 
@@ -302,7 +323,8 @@ public class MainActivity extends Activity {
     payeeField.setHint("Payee (comma-sep) e.g. 174478 or 170551,1234567890");
     payeeField.setInputType(InputType.TYPE_CLASS_TEXT);
     final EditText pin = new EditText(this);
-    pin.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+    pin.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD);
+    pin.setTransformationMethod(PasswordTransformationMethod.getInstance());   // always display as ****
     pin.setHint("PIN (optional) - stored on this phone only");
     if (idx >= 0) {
       String[] p = a[idx].split("\t", 4);
@@ -332,7 +354,7 @@ public class MainActivity extends Activity {
         public void onClick(DialogInterface d, int w) {
           String line = n.getText().toString().trim() + "\t"
             + s.getText().toString().trim() + "\t"
-            + payeeField.getText().toString().trim() + "\t"
+            + cleanPayee(payeeField.getText().toString()) + "\t"
             + pin.getText().toString().trim();
           String[] r;
           if (idx >= 0) { r = a; r[idx] = line; }
