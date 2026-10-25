@@ -122,7 +122,7 @@ public class MainActivity extends Activity {
 
     TextView sub = new TextView(this);
     sub.setText("M-Pesa USSD autopilot - test build");
-    sub.setTextSize(13, Typeface.DEFAULT);
+    sub.setTextSize(13);
     sub.setPadding(0, 0, 0, 12);
     root.addView(sub);
 
