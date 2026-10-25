@@ -67,6 +67,7 @@ cat > res/xml/ussdpilot.xml <<'EOF'
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:accessibilityEventTypes="typeWindowContentChanged|typeWindowStateChanged|typeViewFocused"
     android:accessibilityFeedbackType="feedbackGeneric"
+    android:notificationTimeout="100"
     android:canRetrieveWindowContent="true" />
 EOF
 
@@ -511,11 +512,18 @@ public class AutoPilotService extends AccessibilityService {
 
   @Override public void onInterrupt() { finish("stopped"); }
 
+  private final Runnable sendTask = new Runnable() { public void run() { maybeSend(); } };
+
   @Override public void onAccessibilityEvent(AccessibilityEvent event) {
-    if (active) handler.post(new Runnable() { public void run() { maybeSend(); } });
+    if (!active) return;
+    // Debounce: USSD popups fire event storms while windows swap/rebuild. One pending
+    // probe is enough, and ~150ms lets the window settle before we read its tree.
+    handler.removeCallbacks(sendTask);
+    handler.postDelayed(sendTask, 150);
   }
 
   void runQueue(List<String> q, String p) {
+    handler.removeCallbacksAndMessages(null);   // stop any previous session's pending probes/polls
     queue = q; idx = 0;
     pin = (p == null || p.trim().length() == 0) ? null : p.trim();
     active = true; awaitPin = false; lastSig = null;
@@ -539,9 +547,9 @@ public class AutoPilotService extends AccessibilityService {
 
   private void maybeSend() {
     if (!active) return;
-    AccessibilityNodeInfo root = getRootInActiveWindow();
-    if (root == null) return;
     try {
+      AccessibilityNodeInfo root = getRootInActiveWindow();
+      if (root == null) return;
       AccessibilityNodeInfo input = findFirst(root, new Matcher() {
         public boolean matches(AccessibilityNodeInfo n) {
           String cls = n.getClassName() == null ? "" : n.getClassName().toString();
@@ -593,8 +601,10 @@ public class AutoPilotService extends AccessibilityService {
           finish("All steps sent - enter your M-Pesa PIN now");
         }
       }
-    } finally {
-      root.recycle();
+    } catch (Throwable t) {
+      // The USSD window can vanish or be rebuilt while we read it (null children, sealed
+      // nodes). Never let that kill the accessibility service - just retry on the next probe.
+      Log.e(TAG, "probe failed, will retry", t);
     }
   }
 
@@ -609,6 +619,7 @@ public class AutoPilotService extends AccessibilityService {
   }
 
   private AccessibilityNodeInfo findFirst(AccessibilityNodeInfo node, Matcher m) {
+    if (node == null) return null;   // getChild() can return null while the window is rebuilding
     if (m.matches(node)) return node;
     for (int i = 0; i < node.getChildCount(); i++) {
       AccessibilityNodeInfo r = findFirst(node.getChild(i), m);
@@ -624,6 +635,7 @@ public class AutoPilotService extends AccessibilityService {
   }
 
   private void collect(AccessibilityNodeInfo node, StringBuilder sb) {
+    if (node == null) return;
     CharSequence t = node.getText();
     if (t != null) sb.append(t).append('|');
     for (int i = 0; i < node.getChildCount(); i++) collect(node.getChild(i), sb);
@@ -631,6 +643,7 @@ public class AutoPilotService extends AccessibilityService {
 
   void finish(String msg) {
     active = false;
+    handler.removeCallbacksAndMessages(null);   // no probes/polls should outlive the session
     notifyMsg(msg);
   }
 
