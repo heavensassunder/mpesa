@@ -3,10 +3,12 @@
 # No PC, no Android Studio, no Gradle. Run inside Termux.
 #
 # How it works:
-#  - You save entries: name + menu steps (e.g. "3,2") + payee numbers (e.g. till "174478").
+#  - Entries: name + menu steps (e.g. "3,2") + payee numbers (e.g. till "174478",
+#    paybill "170551,1234567890", or a phone picked from Contacts) + optional M-Pesa PIN.
 #  - Tap entry -> enter amount -> app dials plain *334# -> accessibility service types the
 #    steps into the USSD popup, presses Send, waits for the next screen, repeats.
-#  - Stops before the M-Pesa PIN: YOU type the PIN. The app never sees it.
+#  - With a PIN stored, it types the PIN when the PIN prompt appears. Without one, it stops
+#    and you type the PIN yourself. The PIN is stored on this device only - never sent anywhere.
 set -e
 
 pkg install -y openjdk-17 aapt apksigner dx findutils wget >/dev/null 2>&1 || true
@@ -77,8 +79,11 @@ import android.app.AlertDialog;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.database.Cursor;
+import android.graphics.Typeface;
 import android.net.Uri;
 import android.os.Bundle;
+import android.provider.ContactsContract;
 import android.provider.Settings;
 import android.text.InputType;
 import android.view.View;
@@ -96,6 +101,11 @@ public class MainActivity extends Activity {
   SharedPreferences sp;
   LinearLayout list;
   TextView status;
+  EditText payeeField;   // payee field of the open Add/Edit dialog (for contact picking)
+
+  private static final int PICK = 1;
+  private static final int GREEN = 0xFF2E7D32;
+  private static final int RED = 0xFFC62828;
 
   protected void onCreate(Bundle b) {
     super.onCreate(b);
@@ -104,18 +114,41 @@ public class MainActivity extends Activity {
     root.setOrientation(LinearLayout.VERTICAL);
     root.setPadding(24, 24, 24, 24);
 
+    TextView title = new TextView(this);
+    title.setText("UssdPilot");
+    title.setTextSize(24, Typeface.DEFAULT_BOLD);
+    title.setPadding(0, 0, 0, 4);
+    root.addView(title);
+
+    TextView sub = new TextView(this);
+    sub.setText("M-Pesa USSD autopilot - test build");
+    sub.setTextSize(13, Typeface.DEFAULT);
+    sub.setPadding(0, 0, 0, 12);
+    root.addView(sub);
+
     status = new TextView(this);
+    status.setPadding(0, 8, 0, 8);
     root.addView(status);
 
     Button acc = new Button(this);
     acc.setText("Enable AutoPilot (Accessibility)");
+    acc.setPadding(16, 8, 16, 8);
     acc.setOnClickListener(new View.OnClickListener() {
       public void onClick(View v) { startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)); }
     });
     root.addView(acc);
 
+    Button about = new Button(this);
+    about.setText("About / Credits");
+    about.setPadding(16, 8, 16, 8);
+    about.setOnClickListener(new View.OnClickListener() {
+      public void onClick(View v) { showAbout(); }
+    });
+    root.addView(about);
+
     Button add = new Button(this);
     add.setText("+ Add");
+    add.setPadding(16, 8, 16, 8);
     add.setOnClickListener(new View.OnClickListener() {
       public void onClick(View v) { edit(-1); }
     });
@@ -126,13 +159,39 @@ public class MainActivity extends Activity {
     ScrollView sv = new ScrollView(this);
     sv.addView(list);
     root.addView(sv);
+
+    TextView footer = new TextView(this);
+    footer.setText("Optional PIN: stored on this phone only. Do not use on a device you don't fully trust.");
+    footer.setTextSize(11, Typeface.DEFAULT);
+    footer.setPadding(0, 24, 0, 0);
+    root.addView(footer);
+
     setContentView(root);
     render();
   }
 
   protected void onResume() {
     super.onResume();
-    status.setText("AutoPilot: " + (AutoPilotService.isRunning() ? "ON" : "OFF - tap the button above to enable it"));
+    if (AutoPilotService.isRunning()) {
+      status.setText("AutoPilot: ON");
+      status.setTextColor(GREEN);
+    } else {
+      status.setText("AutoPilot: OFF - tap the button above to enable it");
+      status.setTextColor(RED);
+    }
+  }
+
+  void showAbout() {
+    TextView tv = new TextView(this);
+    tv.setPadding(40, 30, 40, 10);
+    tv.setText("Creator: heavensassunder\n"
+      + "WhatsApp: ask the creator (see GitHub)\n"
+      + "GitHub: github.com/heavensassunder/mpesa\n\n"
+      + "Personal test project. Your M-Pesa PIN never leaves this device - it is only "
+      + "typed into the USSD session on this phone.");
+    tv.setTextSize(14, Typeface.DEFAULT);
+    new AlertDialog.Builder(this).setTitle("About UssdPilot").setView(tv)
+      .setPositiveButton("Close", null).show();
   }
 
   String[] items() {
@@ -152,12 +211,15 @@ public class MainActivity extends Activity {
     final String[] a = items();
     for (int i = 0; i < a.length; i++) {
       final int idx = i;
-      String[] p = a[i].split("\t", 3);
+      String[] p = a[i].split("\t", 4);
       String name = p[0];
       String steps = p.length > 1 ? p[1] : "";
       String payee = p.length > 2 ? p[2] : "";
+      boolean pinOn = p.length > 3 && p[3].length() > 0;
       Button bt = new Button(this);
-      bt.setText(name + "   [" + steps + (payee.isEmpty() ? "" : " + " + payee) + "]");
+      bt.setPadding(16, 10, 16, 10);
+      bt.setText(name + "   [" + steps + (payee.isEmpty() ? "" : " + " + payee) + "]   "
+        + (pinOn ? "PIN: on" : "PIN: off"));
       bt.setOnClickListener(new View.OnClickListener() {
         public void onClick(View v) { pay(idx); }
       });
@@ -170,9 +232,10 @@ public class MainActivity extends Activity {
 
   void pay(final int idx) {
     final String[] a = items();
-    String[] p = a[idx].split("\t", 3);
+    String[] p = a[idx].split("\t", 4);
     final String steps = p.length > 1 ? p[1] : "";
     final String payee = p.length > 2 ? p[2] : "";
+    final String pin = p.length > 3 ? p[3] : "";
     final EditText e = new EditText(this);
     e.setInputType(InputType.TYPE_CLASS_NUMBER);
     e.setHint("Amount (leave empty to skip)");
@@ -190,7 +253,7 @@ public class MainActivity extends Activity {
             return;
           }
           dial();
-          AutoPilotService.begin(q);
+          AutoPilotService.begin(q, pin);
         }
       }).show();
   }
@@ -199,29 +262,77 @@ public class MainActivity extends Activity {
     startActivity(new Intent(Intent.ACTION_DIAL, Uri.parse("tel:" + Uri.encode("*334#"))));
   }
 
+  void pickContact() {
+    try {
+      startActivityForResult(new Intent(Intent.ACTION_PICK,
+        ContactsContract.CommonDataKinds.Phone.CONTENT_URI), PICK);
+    } catch (Exception ex) {
+      Toast.makeText(this, "No contacts app found", Toast.LENGTH_SHORT).show();
+    }
+  }
+
+  @Override protected void onActivityResult(int req, int res, Intent data) {
+    super.onActivityResult(req, res, data);
+    if (req == PICK && res == RESULT_OK && data != null && payeeField != null) {
+      String num = null;
+      Cursor c = null;
+      try {
+        c = getContentResolver().query(data.getData(), null, null, null, null);
+        if (c != null && c.moveToFirst()) {
+          int i = c.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER);
+          if (i >= 0) num = c.getString(i);
+        }
+      } catch (Exception ex) {
+        Toast.makeText(this, "Could not read contact", Toast.LENGTH_SHORT).show();
+      } finally {
+        if (c != null) c.close();
+      }
+      if (num != null && num.trim().length() > 0) payeeField.setText(num.trim());
+    }
+  }
+
   void edit(final int idx) {
     final String[] a = items();
     final EditText n = new EditText(this);
     n.setHint("Name e.g. Naivas / Mom / KPLC");
     final EditText s = new EditText(this);
     s.setHint("Steps (menu numbers, comma-sep) e.g. 3,2");
-    final EditText q = new EditText(this);
-    q.setHint("Payee (comma-sep) e.g. 174478 or 170551,1234567890");
+    payeeField = new EditText(this);
+    payeeField.setHint("Payee (comma-sep) e.g. 174478 or 170551,1234567890");
+    payeeField.setInputType(InputType.TYPE_CLASS_TEXT);
+    final EditText pin = new EditText(this);
+    pin.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+    pin.setHint("PIN (optional) - stored on this phone only");
     if (idx >= 0) {
-      String[] p = a[idx].split("\t", 3);
+      String[] p = a[idx].split("\t", 4);
       n.setText(p[0]);
       if (p.length > 1) s.setText(p[1]);
-      if (p.length > 2) q.setText(p[2]);
+      if (p.length > 2) payeeField.setText(p[2]);
+      if (p.length > 3) pin.setText(p[3]);
     }
+    Button pick = new Button(this);
+    pick.setText("Pick");
+    pick.setOnClickListener(new View.OnClickListener() {
+      public void onClick(View v) { pickContact(); }
+    });
+    LinearLayout payeeRow = new LinearLayout(this);
+    payeeRow.setOrientation(LinearLayout.HORIZONTAL);
+    payeeRow.addView(payeeField, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+    payeeRow.addView(pick, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
     LinearLayout l = new LinearLayout(this);
     l.setOrientation(LinearLayout.VERTICAL);
-    l.addView(n); l.addView(s); l.addView(q);
+    l.addView(n);
+    l.addView(s);
+    l.addView(payeeRow);
+    l.addView(pin);
     AlertDialog.Builder bd = new AlertDialog.Builder(this).setView(l)
       .setPositiveButton("Save", new DialogInterface.OnClickListener() {
         public void onClick(DialogInterface d, int w) {
           String line = n.getText().toString().trim() + "\t"
             + s.getText().toString().trim() + "\t"
-            + q.getText().toString().trim();
+            + payeeField.getText().toString().trim() + "\t"
+            + pin.getText().toString().trim();
           String[] r;
           if (idx >= 0) { r = a; r[idx] = line; }
           else { r = new String[a.length + 1]; System.arraycopy(a, 0, r, 0, a.length); r[a.length] = line; }
@@ -265,14 +376,16 @@ public class AutoPilotService extends AccessibilityService {
   private final Handler handler = new Handler(Looper.getMainLooper());
   private List<String> queue;
   private int idx;
+  private String pin;
   private boolean active;
+  private boolean awaitPin;
   private String lastSig;
   private long lastSentAt;
 
   public static boolean isRunning() { return instance != null; }
 
-  public static void begin(List<String> steps) {
-    if (instance != null) instance.runQueue(steps);
+  public static void begin(List<String> steps, String pin) {
+    if (instance != null) instance.runQueue(steps, pin);
   }
 
   @Override public void onServiceConnected() { instance = this; }
@@ -285,10 +398,12 @@ public class AutoPilotService extends AccessibilityService {
     if (active) handler.post(new Runnable() { public void run() { maybeSend(); } });
   }
 
-  void runQueue(List<String> q) {
-    queue = q; idx = 0; active = true; lastSig = null;
+  void runQueue(List<String> q, String p) {
+    queue = q; idx = 0;
+    pin = (p == null || p.trim().length() == 0) ? null : p.trim();
+    active = true; awaitPin = false; lastSig = null;
     lastSentAt = System.currentTimeMillis();
-    notifyMsg("Armed - " + q.size() + " steps: " + q.toString());
+    notifyMsg("Armed - " + q.size() + " steps" + (pin != null ? " + PIN" : ""));
     handler.post(new Runnable() { public void run() { poll(); } });
   }
 
@@ -296,8 +411,10 @@ public class AutoPilotService extends AccessibilityService {
     if (!active) return;
     maybeSend();
     if (!active) return;
-    if (idx < queue.size() && System.currentTimeMillis() - lastSentAt > 20000) {
-      finish("no response for 20s - session may have timed out");
+    if (System.currentTimeMillis() - lastSentAt > 20000) {
+      if (idx < queue.size()) finish("no response for 20s - session may have timed out");
+      else if (awaitPin) finish("PIN prompt not detected in time - enter your PIN manually");
+      else finish("All steps sent - enter your M-Pesa PIN now");
       return;
     }
     if (active) handler.postDelayed(new Runnable() { public void run() { poll(); } }, 1200);
@@ -305,7 +422,6 @@ public class AutoPilotService extends AccessibilityService {
 
   private void maybeSend() {
     if (!active) return;
-    if (idx >= queue.size()) { finish("All steps sent - enter your M-Pesa PIN now"); return; }
     AccessibilityNodeInfo root = getRootInActiveWindow();
     if (root == null) return;
     try {
@@ -315,7 +431,6 @@ public class AutoPilotService extends AccessibilityService {
           return cls.contains("EditText") || n.isEditable();
         }
       });
-      if (input == null) return;
       AccessibilityNodeInfo button = findFirst(root, new Matcher() {
         public boolean matches(AccessibilityNodeInfo n) {
           String cls = n.getClassName() == null ? "" : n.getClassName().toString();
@@ -323,13 +438,22 @@ public class AutoPilotService extends AccessibilityService {
           CharSequence t = n.getText();
           if (t == null) return false;
           String s = t.toString().trim().toLowerCase();
-          return s.equals("send") || s.equals("ok") || s.equals("done")
-            || s.contains("发送") || s.contains("确定") || s.contains("确认");
+          return s.equals("send") || s.equals("ok") || s.equals("done") || s.equals("submit")
+            || s.contains("发送") || s.contains("确定") || s.contains("确认") || s.contains("提交");
         }
       });
-      if (button == null) return;
       String sig = signature(root);
-      if (sig.equals(lastSig)) return;
+
+      if (idx >= queue.size()) {
+        if (!awaitPin) { finish("All steps sent - enter your M-Pesa PIN now"); return; }
+        if (input == null || button == null) { finish("Session closed - check whether the payment went through"); return; }
+        if (sig.equals(lastSig)) return;          // PIN prompt not up yet - wait for a new screen
+        sendPin(input, button, sig);
+        return;
+      }
+
+      if (input == null || button == null) return;   // popup not up yet or closed
+      if (sig.equals(lastSig)) return;               // same screen - wait for the session to refresh
       lastSig = sig;
       Bundle args = new Bundle();
       args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, queue.get(idx));
@@ -338,9 +462,26 @@ public class AutoPilotService extends AccessibilityService {
       Log.i(TAG, "sent " + (idx + 1) + "/" + queue.size() + ": " + queue.get(idx));
       idx++;
       lastSentAt = System.currentTimeMillis();
-      if (idx >= queue.size()) finish("All steps sent - enter your M-Pesa PIN now");
+      if (idx >= queue.size()) {
+        awaitPin = (pin != null);
+        finish(pin != null ? "Steps sent - PIN will be typed when the prompt appears" : "All steps sent - enter your M-Pesa PIN now");
+      }
     } finally {
       root.recycle();
+    }
+  }
+
+  private void sendPin(AccessibilityNodeInfo input, AccessibilityNodeInfo button, String sig) {
+    if (sig.toLowerCase().contains("pin")) {
+      Bundle args = new Bundle();
+      args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, pin);
+      input.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
+      button.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+      Log.i(TAG, "PIN typed and sent");
+      lastSentAt = System.currentTimeMillis();
+      finish("Payment sent - check your SMS confirmation");
+    } else {
+      finish("PIN prompt not detected - enter your M-Pesa PIN manually");
     }
   }
 
@@ -405,5 +546,5 @@ mkdir -p ~/storage/Download 2>/dev/null || true
 cp UssdPilot.apk ~/storage/Download/UssdPilot.apk 2>/dev/null && echo "Copied to ~/storage/Download/UssdPilot.apk" \
   || echo "APK at $P/UssdPilot.apk (run termux-setup-storage to copy to Downloads)"
 echo "Install it now with:  termux-open $P/UssdPilot.apk"
-echo "First test: enable AutoPilot, add an entry with steps '1' and no payee, tap it, watch the popup."
+echo "Test order: 1) enable AutoPilot  2) add entry steps '1', PIN empty, tap it  3) then retry with PIN stored."
 echo DONE
