@@ -4,6 +4,13 @@
 set -e
 
 pkg install -y openjdk-17 aapt apksigner dx ecj findutils >/dev/null 2>&1 || true
+for t in java ecj dx aapt apksigner keytool; do
+  command -v "$t" >/dev/null 2>&1 || {
+    echo "ERROR: $t is missing. Install manually with:"
+    echo "  pkg install -y openjdk-17 aapt apksigner dx ecj findutils"
+    exit 1
+  }
+done
 
 # ---- 1. Find an android.jar (framework stubs) ----
 AJ=""
