@@ -446,10 +446,15 @@ public class AutoPilotService extends AccessibilityService {
       String sig = signature(root);
 
       if (idx >= queue.size()) {
+        // All queued steps sent. With a stored PIN: stay active and wait for the PIN prompt screen.
         if (!awaitPin) { finish("All steps sent - enter your M-Pesa PIN now"); return; }
-        if (input == null || button == null) { finish("Session closed - check whether the payment went through"); return; }
-        if (sig.equals(lastSig)) return;          // PIN prompt not up yet - wait for a new screen
-        sendPin(input, button, sig);
+        if (input == null || button == null) return;   // loading/intermediate screen - keep waiting
+        if (sig.equals(lastSig)) return;               // same screen - PIN prompt not up yet
+        if (sig.toLowerCase().contains("pin")) {
+          sendPin(input, button);
+        } else {
+          lastSig = sig;   // new screen but not the PIN prompt yet - never type the PIN here, keep waiting
+        }
         return;
       }
 
@@ -464,26 +469,27 @@ public class AutoPilotService extends AccessibilityService {
       idx++;
       lastSentAt = System.currentTimeMillis();
       if (idx >= queue.size()) {
-        awaitPin = (pin != null);
-        finish(pin != null ? "Steps sent - PIN will be typed when the prompt appears" : "All steps sent - enter your M-Pesa PIN now");
+        if (pin != null) {
+          awaitPin = true;   // stay active: keep watching for the PIN prompt (must NOT finish here)
+          notifyMsg("Steps sent - waiting for the PIN prompt...");
+          Log.i(TAG, "all steps sent, awaiting PIN prompt");
+        } else {
+          finish("All steps sent - enter your M-Pesa PIN now");
+        }
       }
     } finally {
       root.recycle();
     }
   }
 
-  private void sendPin(AccessibilityNodeInfo input, AccessibilityNodeInfo button, String sig) {
-    if (sig.toLowerCase().contains("pin")) {
-      Bundle args = new Bundle();
-      args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, pin);
-      input.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
-      button.performAction(AccessibilityNodeInfo.ACTION_CLICK);
-      Log.i(TAG, "PIN typed and sent");
-      lastSentAt = System.currentTimeMillis();
-      finish("Payment sent - check your SMS confirmation");
-    } else {
-      finish("PIN prompt not detected - enter your M-Pesa PIN manually");
-    }
+  private void sendPin(AccessibilityNodeInfo input, AccessibilityNodeInfo button) {
+    Bundle args = new Bundle();
+    args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, pin);
+    input.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
+    button.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+    Log.i(TAG, "PIN typed and sent");
+    lastSentAt = System.currentTimeMillis();
+    finish("Payment sent - check your SMS confirmation");
   }
 
   private AccessibilityNodeInfo findFirst(AccessibilityNodeInfo node, Matcher m) {
